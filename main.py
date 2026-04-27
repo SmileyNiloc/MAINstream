@@ -67,7 +67,7 @@ class App(customtkinter.CTk):
         self._llm_handler = llm_handler
 
         self.title("MAINstream")
-        self.geometry("960x720")
+        self.geometry("1180x960")
         self.minsize(860, 620)
         # Set the window to use a grid layout
         self.grid_columnconfigure(0, weight=1)
@@ -89,6 +89,15 @@ class App(customtkinter.CTk):
         self.responses_frame.grid(
             row=0, column=0, padx=24, pady=(24, 12), sticky="nsew"
         )
+        self.queryInput = customtkinter.CTkEntry(
+            self,
+            placeholder_text="Enter your query here...",
+            height=42,
+            corner_radius=14,
+        )
+        self.queryInput.grid(
+            row=1, column=0, padx=24, pady=(0, 12), sticky="ew"
+        )
         self.button = customtkinter.CTkButton(
             self,
             text="Query LLMs",
@@ -96,16 +105,21 @@ class App(customtkinter.CTk):
             height=42,
             corner_radius=14,
         )
-        self.button.grid(row=1, column=0, padx=24, pady=(0, 24), sticky="ew")
+        self.button.grid(row=2, column=0, padx=24, pady=(0, 24), sticky="ew")
 
         self.check_queue_for_updates()
 
     def button_callback(self):
+        query = self.queryInput.get()
+        if not query:
+            return
+
         # Start the query worker in a separate thread
         apis = self._llm_handler._apis
         self._create_empty_cards(len(apis))
 
-        query_thread = threading.Thread(target=self.query_worker)
+        query_thread = threading.Thread(
+            target=self.query_worker, args=(query,))
         query_thread.start()
 
     def check_queue_for_updates(self):
@@ -157,13 +171,13 @@ class App(customtkinter.CTk):
             title.grid(row=0, column=0, padx=16, pady=(14, 8), sticky="ew")
 
             # Make a new text display widget for each response and add it to the card
-            self._textDisplays[i] = textDisplay(card, width=240, height=720)
+            self._textDisplays[i] = textDisplay(card, width=340, height=540)
 
             self._textDisplays[i].grid(
                 row=1, column=0, padx=16, pady=(0, 16), sticky="nsew"
             )
 
-    def query_worker(self, query="test"):
+    def query_worker(self, query):
         '''
         Worker function to query the LLM APIs and update the UI with the responses
         '''
