@@ -1,6 +1,5 @@
 import customtkinter
 import threading
-import queue
 from uuid import uuid4
 from src.rank import Ranker
 from src.textdisplay import textDisplay
@@ -16,14 +15,19 @@ class App(customtkinter.CTk):
         self._ranker = Ranker()
         self._latest_query_results = {}
         self._results_lock = threading.Lock()
+        self._current_card_data = []
+        self._query_in_progress = False
 
         self.title('MAINstream')
-        self._configure_responsive_window()
+        self.geometry(f'{1520}x{1120}')
+        self.bind('<Configure>', self._on_window_resize)
+        self._resize_job = None
+        self._card_frames = []
+
         self.grid_columnconfigure(0, weight=0)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self.response_queue = queue.Queue()
         self.current_card_index = 0
         self._responses = []
         self._textDisplays = {}
@@ -139,44 +143,50 @@ class App(customtkinter.CTk):
                               pady=(0, 12), sticky='e')
 
         self.refresh_history_sidebar()
-        self.check_queue_for_updates()
 
-    def _configure_responsive_window(self):
-        '''Set initial window size and scaling based on screen size.'''
-        self.update_idletasks()
+    def _on_window_resize(self, event):
+        if event.widget is not self:
+            return
+        if self._resize_job is not None:
+            self.after_cancel(self._resize_job)
+        self._resize_job = self.after(100, self._update_card_widths)
 
-        screen_width = max(1, self.winfo_screenwidth())
-        screen_height = max(1, self.winfo_screenheight())
-
-        # Scale slightly down on smaller screens and up a bit on large ones.
-        # Keep the values conservative so the UI stays readable.
-        if screen_width <= 1366 or screen_height <= 768:
-            widget_scale = 0.92
-            window_scale = 0.92
-        elif screen_width >= 1920 or screen_height >= 1080:
-            widget_scale = 1.05
-            window_scale = 1.0
-        else:
-            widget_scale = 1.0
-            window_scale = 1.0
+    def _update_card_widths(self):
+        self._resize_job = None
+        if not hasattr(self, '_card_frames') or not self._card_frames:
+            return
 
         try:
-            customtkinter.set_widget_scaling(widget_scale)
-            customtkinter.set_window_scaling(window_scale)
+            available_width = self.responses_frame._parent_canvas.winfo_width()
+        except AttributeError:
+            available_width = self.responses_frame.winfo_width()
+
+        if available_width <= 1:
+            available_width = self.winfo_width() - 400
+
+        card_count = len(self._card_frames)
+        target_width = int((available_width / card_count) - 34)
+        target_width = max(400, target_width)
+
+        for card in self._card_frames:
+            if card.winfo_exists():
+                card.configure(width=target_width)
+                try:
+                    card.grid_propagate(False)
+                except Exception:
+                    pass
+
+        # ensure the scrollable canvas recalculates its region after size changes
+        try:
+            self.responses_frame.update_idletasks()
+            canvas = getattr(self.responses_frame, '_parent_canvas', None)
+            if canvas is not None:
+                try:
+                    canvas.configure(scrollregion=canvas.bbox('all'))
+                except Exception:
+                    pass
         except Exception:
             pass
-
-        window_width = min(1680, max(1160, int(screen_width * 0.88)))
-        window_height = min(1080, max(780, int(screen_height * 0.88)))
-
-        min_width = min(1280, max(1024, int(screen_width * 0.78)))
-        min_height = min(860, max(720, int(screen_height * 0.78)))
-
-        x_pos = max(0, (screen_width - window_width) // 2)
-        y_pos = max(0, (screen_height - window_height) // 2)
-
-        self.geometry(f'{window_width}x{window_height}+{x_pos}+{y_pos}')
-        self.minsize(min_width, min_height)
 
     def button_callback(self):
         if self._loaded_history_query is not None:
@@ -194,15 +204,19 @@ class App(customtkinter.CTk):
         self._set_query_button_enabled(True)
         apis = self._llm_handler._apis
         query_id = str(uuid4())
+        self._query_in_progress = True
         with self._results_lock:
-            self._latest_query_results = {}
-        self._create_cards([
-            {
-                'name': getattr(api, '_name', None) or f'Response {index + 1}',
-                'score': None,
+            self._latest_query_results = {
+                index: {
+                    'name': getattr(api, '_name', None) or f'Response {index + 1}',
+                    'score': None,
+                    'text': None,
+                    'comparative_rank': None
+                }
+                for index, api in enumerate(apis)
             }
-            for index, api in enumerate(apis)
-        ])
+
+        self._render_current_cards()
 
         query_thread = threading.Thread(
             target=self.query_worker, args=(query, query_id), daemon=True
@@ -286,17 +300,16 @@ class App(customtkinter.CTk):
         self._set_query_button_enabled(False)
         self.queryInput.delete(0, 'end')
         self.queryInput.insert(0, query)
-        self._create_cards(
-            [
-                {
-                    'name': response['api_name'],
-                    'text': response['response'],
-                    'score': response.get('score'),
-                    'comparative_rank': response.get('comparative_rank'),
-                }
-                for response in responses
-            ]
-        )
+        self._current_card_data = [
+            {
+                'name': response['api_name'],
+                'text': response['response'],
+                'score': response.get('score'),
+                'comparative_rank': response.get('comparative_rank'),
+            }
+            for response in responses
+        ]
+        self._create_cards(self._current_card_data)
 
     def _set_query_button_enabled(self, enabled):
         state = 'normal' if enabled else 'disabled'
@@ -312,6 +325,7 @@ class App(customtkinter.CTk):
         for widget in self.responses_frame.winfo_children():
             widget.destroy()
         self._textDisplays.clear()
+        self._card_frames = []
 
     def _ordinal(self, value):
         if 10 <= value % 100 <= 20:
@@ -352,6 +366,21 @@ class App(customtkinter.CTk):
         self._clear_cards()
 
         cards_to_render = list(cards)
+        self._current_card_data = [dict(card) for card in cards_to_render]
+
+        card_count = max(1, len(cards_to_render))
+
+        try:
+            available_width = self.responses_frame._parent_canvas.winfo_width()
+        except AttributeError:
+            available_width = self.responses_frame.winfo_width()
+
+        if available_width <= 1:
+            available_width = self.winfo_width() - 400
+
+        target_width = int((available_width / card_count) - 34)
+        target_width = max(400, target_width)
+
         # Sort depending on chosen mode if all cards have the required value
         if self._sort_by == 'comparative_rank' and cards_to_render and all(
             card.get('comparative_rank') is not None for card in cards_to_render
@@ -373,9 +402,18 @@ class App(customtkinter.CTk):
                 border_width=1,
                 border_color=(style['border'], style['border']),
                 fg_color=('#FFFFFF', '#111827'),
+                width=target_width,
             )
+            self._card_frames.append(card)
             card.grid(row=0, column=index, padx=12, pady=12, sticky='nsew')
             card.grid_columnconfigure(0, weight=1)
+            card.grid_rowconfigure(4, weight=1)
+            try:
+                # keep the explicit width we set instead of allowing the
+                # scrollable frame's internal layout to reflow it back smaller
+                card.grid_propagate(False)
+            except Exception:
+                pass
 
             title = customtkinter.CTkLabel(
                 card,
@@ -422,113 +460,101 @@ class App(customtkinter.CTk):
                             pady=(0, 10), sticky='ew')
 
             self._textDisplays[index] = textDisplay(
-                card, width=420, height=660)
+                card, width=10, height=10)
             self._textDisplays[index].grid(
                 row=4, column=0, padx=20, pady=(0, 20), sticky='nsew'
             )
+            self.responses_frame.grid_rowconfigure(0, weight=1)
+            self.responses_frame.grid_columnconfigure(
+                index, weight=1, minsize=400)
 
             if card_data.get('text'):
                 self._textDisplays[index].add_text(card_data['text'])
-
-    def check_queue_for_updates(self):
-        '''Runs on the MAIN thread.'''
-        try:
-            while True:
-                data = self.response_queue.get_nowait()
-                card_index = data['index']
-                chunk = data['text']
-                self._textDisplays[card_index].append_text(chunk)
-
-        except queue.Empty:
-            pass
-        finally:
-            self.after(50, self.check_queue_for_updates)
 
     def query_worker(self, query, query_id):
         '''
         Worker function to query the LLM APIs and update the UI with the responses
         '''
-        if self._llm_handler is None:
-            return
-        apis = self._llm_handler._apis
-        workers = []
+        try:
+            if self._llm_handler is None:
+                return
+            apis = self._llm_handler._apis
+            workers = []
 
-        for index, api in enumerate(apis):
-            worker = threading.Thread(
-                target=self._api_worker,
-                args=(api, query_id, query, index),
-                daemon=True,
+            for index, api in enumerate(apis):
+                worker = threading.Thread(
+                    target=self._api_worker,
+                    args=(api, query_id, query, index),
+                    daemon=True,
+                )
+                worker.start()
+                workers.append(worker)
+
+            for worker in workers:
+                worker.join()
+
+            with self._results_lock:
+                completed_results = [
+                    data for _, data in sorted(self._latest_query_results.items())
+                ]
+
+            # Build list of (row_id, text) for comparison so the comparator can
+            # return (rank, row_id) tuples which can be written back to exact DB rows.
+            responses_for_comparison = [
+                (item.get('id'), item.get('text', '')) for item in completed_results
+            ]
+
+            comparative_results = self._ranker.compare_responses(
+                query,
+                responses_for_comparison,
             )
-            worker.start()
-            workers.append(worker)
 
-        for worker in workers:
-            worker.join()
+            # comparative_results is expected as list of (rank, row_id)
+            if comparative_results:
+                for rank_val, row_id in comparative_results:
+                    # Update in-memory representation
+                    for index, result in self._latest_query_results.items():
+                        if result.get('id') == row_id:
+                            result['comparative_rank'] = rank_val
+                            break
 
+                    # Persist to DB by row id if available
+                    if self._database_manager is not None and row_id is not None:
+                        self._database_manager.update_comparative_rank_by_id(
+                            row_id, rank_val
+                        )
+
+            if self._latest_query_results:
+                self.after(0, self._render_current_cards)
+
+            if self._database_manager is not None:
+                self.after(0, self.refresh_history_sidebar)
+        finally:
+            self._query_in_progress = False
+
+    def _render_current_cards(self):
         with self._results_lock:
-            completed_results = [
-                data for _, data in sorted(self._latest_query_results.items())
+            cards = [
+                dict(data) for _, data in sorted(self._latest_query_results.items())
             ]
-
-        # Build list of (row_id, text) for comparison so the comparator can
-        # return (rank, row_id) tuples which can be written back to exact DB rows.
-        responses_for_comparison = [
-            (item.get('id'), item.get('text', '')) for item in completed_results
-        ]
-
-        comparative_results = self._ranker.compare_responses(
-            query,
-            responses_for_comparison,
-        )
-
-        # comparative_results is expected as list of (rank, row_id)
-        if comparative_results:
-            for rank_val, row_id in comparative_results:
-                # Update in-memory representation
-                for result in completed_results:
-                    if result.get('id') == row_id:
-                        result['comparative_rank'] = rank_val
-                        break
-
-                # Persist to DB by row id if available
-                if self._database_manager is not None and row_id is not None:
-                    self._database_manager.update_comparative_rank_by_id(
-                        row_id, rank_val
-                    )
-
-        if self._latest_query_results:
-            self.after(0, self._render_ranked_cards_when_ready)
-
-        if self._database_manager is not None:
-            self.after(0, self.refresh_history_sidebar)
-
-    def _render_ranked_cards_when_ready(self):
-        if not self.response_queue.empty():
-            self.after(50, self._render_ranked_cards_when_ready)
-            return
-
-        with self._results_lock:
-            ranked_cards = [
-                data for _, data in sorted(self._latest_query_results.items())
-            ]
-        self._create_cards(ranked_cards)
+        self._create_cards(cards)
 
     def _api_worker(self, api, query_id, query, index):
         '''
-        Read the response stream from one API and add it to the queue
+        Query one API fully and add it to the results
         '''
         try:
-            response = api.query_stream(query)
             full_response = ''
+            # we will still consume the stream if the API returns a generator,
+            # but we won't stream to queue.
+            response = api.query_stream(query)
 
             if isinstance(response, str) or response is None:
                 if response:
                     full_response = response
-                    self.response_queue.put({'index': index, 'text': response})
             else:
                 for chunk in response:
                     full_response += chunk
-                    self.response_queue.put({'index': index, 'text': chunk})
 
             score = None
             if full_response:
@@ -552,9 +578,10 @@ class App(customtkinter.CTk):
                 with self._results_lock:
                     self._latest_query_results[index]['id'] = row_id
 
+            self.after(0, self._render_current_cards)
+
         except Exception as e:
             error_text = f'\n[Error: {e}]'
-            self.response_queue.put({'index': index, 'text': error_text})
             with self._results_lock:
                 self._latest_query_results[index] = {
                     'name': getattr(api, '_name', f'Response {index + 1}'),
@@ -569,3 +596,5 @@ class App(customtkinter.CTk):
                 if row_id is not None:
                     with self._results_lock:
                         self._latest_query_results[index]['id'] = row_id
+
+            self.after(0, self._render_current_cards)
