@@ -2,6 +2,8 @@
 
 from concurrent.futures import ThreadPoolExecutor
 import queue
+from typing import Union, Iterator
+
 
 import customtkinter
 import threading
@@ -9,9 +11,13 @@ from google import genai
 import os
 from dotenv import load_dotenv
 
+import openai
+
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPEN_ROUTER_API_KEY = os.getenv("OPEN_ROUTER_API_KEY")
 
 
 class textDisplay(customtkinter.CTkTextbox):
@@ -26,7 +32,7 @@ class textDisplay(customtkinter.CTkTextbox):
             border_width=1,
             border_color=("#D1D5DB", "#374151"),
             fg_color=("#FFFFFF", "#1F2937"),
-            text_color=("#111827", "#F9FAFB"),
+            text_color="#111827",
             scrollbar_button_color=("#9CA3AF", "#6B7280"),
             scrollbar_button_hover_color=("#6B7280", "#9CA3AF"),
             font=("Segoe UI", 13),
@@ -114,6 +120,9 @@ class App(customtkinter.CTk):
         if not query:
             return
 
+        if self._llm_handler is None:
+            print("No LLM handler provided.")
+            return
         # Start the query worker in a separate thread
         apis = self._llm_handler._apis
         self._create_empty_cards(len(apis))
@@ -181,7 +190,8 @@ class App(customtkinter.CTk):
         '''
         Worker function to query the LLM APIs and update the UI with the responses
         '''
-
+        if self._llm_handler is None:
+            return
         apis = self._llm_handler._apis
 
         with ThreadPoolExecutor() as executor:
@@ -216,18 +226,19 @@ class llmApi():
 
         pass
 
-    def query(self, query):
+    def query(self, query) -> str | None:
         '''
         Send a query to the LLM API and return the response
         '''
 
         pass
 
-    def query_stream(self, query):
+    def query_stream(self, query) -> Union[str, None, Iterator[str]]:
         '''
-        Send a query to the LLM API and return a stream of responses (if the API supports streaming)
+        Send a query to the LLM API and return a stream of responses (if the API supports streaming).
+        By default, call the regular query method which may return a full string (non-streaming).
+        Child classes may override to return an iterator/generator yielding string chunks.
         '''
-        # By default, just call the regular query method if streaming is not implemented
         return self.query(query)
 
 
@@ -262,18 +273,19 @@ class geminiApi(llmApi):
     A class for handling communication with the Gemini API
     '''
 
-    def __init__(self, api_key):
+    def __init__(self, api_key, model="gemini-3.1-flash-lite"):
 
         super().__init__()
         self._api_key = api_key
         self._client = genai.Client(api_key=self._api_key)
+        self._model = model
 
     def query(self, query):
         '''
         Send a query to the Gemini API and return the response
         '''
         response = self._client.models.generate_content(
-            model="gemini-3-flash-preview",
+            model=self._model,
             contents=query
         )
         return response.text
@@ -283,7 +295,7 @@ class geminiApi(llmApi):
         Send a query to the Gemini API and return the response
         '''
         response_stream = self._client.models.generate_content_stream(
-            model="gemini-3-flash-preview",
+            model=self._model,
             contents=query
         )
 
@@ -292,12 +304,99 @@ class geminiApi(llmApi):
                 yield chunk.text
 
 
+class openaiApi(llmApi):
+    '''
+    A class for handling communication with the OpenAI API
+    '''
+
+    def __init__(self, api_key):
+
+        super().__init__()
+        self._api_key = api_key
+        self._client = openai.OpenAI(api_key=self._api_key)
+
+    def query(self, query):
+        '''
+        Send a query to the OpenAI API and return the response
+        '''
+        response = self._client.responses.create(
+            model="o3-mini",
+            input=[
+                {"role": "user", "content": query}
+            ]
+        )
+        return response.output_text
+
+    def query_stream(self, query: str) -> str | None:
+        """
+        Send a query to the OpenAI Responses API and return the full response text.
+        """
+        try:
+            stream = self._client.responses.create(
+                model="o3-mini",
+                input=[
+                    {"role": "user", "content": query}
+                ],
+                stream=True,
+            )
+
+            chunks = []
+            for event in stream:
+                if event.type == "response.output_text.delta":
+                    content = getattr(event, 'text', None)
+
+                    if not content and hasattr(event, 'delta'):
+                        content = getattr(event.delta, 'text', None)
+
+                    if content:
+                        chunks.append(content)
+
+            return ''.join(chunks)
+
+        except Exception as e:
+            print(f"Streaming error: {e}")
+            return f"\n[Error communicating with API: {e}]"
+
+
+class openRouterApi(llmApi):
+    '''
+    A class for handling communication with the OpenRouter API
+    '''
+
+    def __init__(self, api_key, model="inclusionai/ring-2.6-1t:free", url="https://openrouter.ai/api/v1"):
+
+        super().__init__()
+        self._api_key = api_key
+        self._client = openai.OpenAI(
+            base_url=url, api_key=self._api_key)
+        self._model = model
+        self._extra_headers = {
+            "X-Title": "mAInstream",      # Optional: Your app name for rankings
+        }
+
+    def query(self, query):
+        '''
+        Send a query to the OpenRouter API and return the response
+        '''
+
+        response = self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "user", "content": "Hello! What can you do?"}
+            ],
+            extra_headers=self._extra_headers
+        )
+        return response.choices[0].message.content
+
+
 main_llm_handler = llmApiHandler()
 if not GEMINI_API_KEY:
     raise RuntimeError(
         "GEMINI_API_KEY not found. Add it to .env as GEMINI_API_KEY=... or export it in your shell."
     )
 main_llm_handler.add_api(geminiApi(GEMINI_API_KEY))
-
+main_llm_handler.add_api(openRouterApi(OPEN_ROUTER_API_KEY))
+# if OPENAI_API_KEY:
+# main_llm_handler.add_api(openaiApi(OPENAI_API_KEY))
 app = App(llm_handler=main_llm_handler)
 app.mainloop()
