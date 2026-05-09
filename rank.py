@@ -19,17 +19,16 @@ class Ranker:
         # return a random integer between 1 and 10 for now
         return random.randint(1, 10)
 
-    def compare_responses(self, query: str, responses: list) -> list:
+    def compare_responses(self, query: str, responses: list[tuple]) -> List[tuple]:
         '''
-        Compare a list of response from the LLM and return a list of tuples containing the response and its rank
+        Compare responses and return comparative ranks aligned by index.
+        A lower rank value means a better relative result (1 = best).
         '''
-        possible_ranks = []
-        for i in range(len(responses)):
-            possible_ranks.append(i)
-        ranks: List[tuple] = []
-        for i in range(len(responses)):
-            rank = possible_ranks.pop(
-                random.randint(0, len(possible_ranks) - 1))
-            ranks.append((responses[i], rank + 1))
-            # return a list of tuples containing the response and a random rank for now
-        return ranks
+        if not responses:
+            return []
+
+        ids = [rid for rid, _ in responses]
+        possible_ranks = list(range(1, len(ids) + 1))
+        random.shuffle(possible_ranks)
+        # Assign ranks to ids in positional order (placeholder random ordering)
+        return [(possible_ranks[i], ids[i]) for i in range(len(ids))]

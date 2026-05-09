@@ -192,6 +192,17 @@ class App(customtkinter.CTk):
         )
         self.button.grid(row=2, column=0, padx=18, pady=(0, 18), sticky='ew')
 
+        # Sorting control: choose between Score and Comparative Rank
+        self._sort_by = 'score'
+        self.sort_option = customtkinter.CTkOptionMenu(
+            self.main_frame,
+            values=['Score', 'Comparative Rank'],
+            command=self._on_sort_option_change,
+        )
+        self.sort_option.set('Score')
+        self.sort_option.grid(row=3, column=0, padx=18,
+                              pady=(0, 12), sticky='e')
+
         self.refresh_history_sidebar()
         self.check_queue_for_updates()
 
@@ -235,6 +246,14 @@ class App(customtkinter.CTk):
         self._clear_cards()
         self.queryInput.delete(0, 'end')
         self.queryInput.focus_set()
+
+    def _on_sort_option_change(self, value):
+        '''Handle sort option changes from the UI.'''
+        self._sort_by = 'comparative_rank' if value == 'Comparative Rank' else 'score'
+        with self._results_lock:
+            cards = [data for _, data in sorted(
+                self._latest_query_results.items())]
+        self._create_cards(cards)
 
     def refresh_history_sidebar(self):
         '''
@@ -301,6 +320,7 @@ class App(customtkinter.CTk):
                     'name': response['api_name'],
                     'text': response['response'],
                     'score': response.get('score'),
+                    'comparative_rank': response.get('comparative_rank'),
                 }
                 for response in responses
             ]
@@ -360,10 +380,15 @@ class App(customtkinter.CTk):
         self._clear_cards()
 
         cards_to_render = list(cards)
-        if cards_to_render and all(card.get('score') is not None for card in cards_to_render):
+        # Sort depending on chosen mode if all cards have the required value
+        if self._sort_by == 'comparative_rank' and cards_to_render and all(
+            card.get('comparative_rank') is not None for card in cards_to_render
+        ):
             cards_to_render.sort(
-                key=lambda card: card.get('score', 0), reverse=True
-            )
+                key=lambda card: card.get('comparative_rank', 9999))
+        elif cards_to_render and all(card.get('score') is not None for card in cards_to_render):
+            cards_to_render.sort(
+                key=lambda card: card.get('score', 0), reverse=True)
 
         for index, card_data in enumerate(cards_to_render):
             score = card_data.get('score')
@@ -412,10 +437,21 @@ class App(customtkinter.CTk):
             score_label.grid(row=2, column=0, padx=16,
                              pady=(0, 8), sticky='ew')
 
+            comp_rank = card_data.get('comparative_rank')
+            comp_text = f'Comparative Rank: {comp_rank}' if comp_rank is not None else 'Comparative Rank: ...'
+            comp_label = customtkinter.CTkLabel(
+                card,
+                text=comp_text,
+                anchor='w',
+                font=('Segoe UI', 12),
+                text_color=('#1F2937', '#E5E7EB'),
+            )
+            comp_label.grid(row=3, column=0, padx=16, pady=(0, 8), sticky='ew')
+
             self._textDisplays[index] = textDisplay(
                 card, width=340, height=540)
             self._textDisplays[index].grid(
-                row=3, column=0, padx=16, pady=(0, 16), sticky='nsew'
+                row=4, column=0, padx=16, pady=(0, 16), sticky='nsew'
             )
 
             if card_data.get('text'):
@@ -455,6 +491,37 @@ class App(customtkinter.CTk):
 
         for worker in workers:
             worker.join()
+
+        with self._results_lock:
+            completed_results = [
+                data for _, data in sorted(self._latest_query_results.items())
+            ]
+
+        # Build list of (row_id, text) for comparison so the comparator can
+        # return (rank, row_id) tuples which can be written back to exact DB rows.
+        responses_for_comparison = [
+            (item.get('id'), item.get('text', '')) for item in completed_results
+        ]
+
+        comparative_results = self._ranker.compare_responses(
+            query,
+            responses_for_comparison,
+        )
+
+        # comparative_results is expected as list of (rank, row_id)
+        if comparative_results:
+            for rank_val, row_id in comparative_results:
+                # Update in-memory representation
+                for result in completed_results:
+                    if result.get('id') == row_id:
+                        result['comparative_rank'] = rank_val
+                        break
+
+                # Persist to DB by row id if available
+                if self._database_manager is not None and row_id is not None:
+                    self._database_manager.update_comparative_rank_by_id(
+                        row_id, rank_val
+                    )
 
         if self._latest_query_results:
             self.after(0, self._render_ranked_cards_when_ready)
@@ -497,13 +564,20 @@ class App(customtkinter.CTk):
             with self._results_lock:
                 self._latest_query_results[index] = {
                     'name': getattr(api, '_name', f'Response {index + 1}'),
+                    'api_name': getattr(api, '_name', f'Response {index + 1}'),
                     'text': full_response,
                     'score': score,
+                    'id': None,
                 }
 
+            row_id = None
             if full_response and self._database_manager and hasattr(api, '_name'):
-                self._database_manager.insert_response(
+                row_id = self._database_manager.insert_response(
                     query_id, query, full_response, api._name, score)
+
+            if row_id is not None:
+                with self._results_lock:
+                    self._latest_query_results[index]['id'] = row_id
 
         except Exception as e:
             error_text = f'\n[Error: {e}]'
@@ -511,12 +585,17 @@ class App(customtkinter.CTk):
             with self._results_lock:
                 self._latest_query_results[index] = {
                     'name': getattr(api, '_name', f'Response {index + 1}'),
+                    'api_name': getattr(api, '_name', f'Response {index + 1}'),
                     'text': error_text,
                     'score': 0,
+                    'id': None,
                 }
             if self._database_manager and hasattr(api, '_name'):
-                self._database_manager.insert_response(
+                row_id = self._database_manager.insert_response(
                     query_id, query, error_text, api._name, 0)
+                if row_id is not None:
+                    with self._results_lock:
+                        self._latest_query_results[index]['id'] = row_id
 
 
 class llmApi():
@@ -714,6 +793,7 @@ class DatabaseManager:
                     response TEXT NOT NULL,
                     api_name TEXT NOT NULL,
                     score INTEGER,
+                    comparative_rank INTEGER,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -727,6 +807,9 @@ class DatabaseManager:
             if 'score' not in column_names:
                 cursor.execute(
                     "ALTER TABLE responses ADD COLUMN score INTEGER")
+            if 'comparative_rank' not in column_names:
+                cursor.execute(
+                    "ALTER TABLE responses ADD COLUMN comparative_rank INTEGER")
 
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_responses_query_id
@@ -760,14 +843,14 @@ class DatabaseManager:
             cursor = conn.cursor()
             if query_id.startswith('legacy:'):
                 cursor.execute('''
-                    SELECT api_name, response, timestamp
+                    SELECT id, api_name, response, timestamp, score, comparative_rank
                     FROM responses
                     WHERE query = ? AND query_id IS NULL
                     ORDER BY id ASC
                 ''', (query,))
             else:
                 cursor.execute('''
-                    SELECT api_name, response, timestamp, score
+                    SELECT id, api_name, response, timestamp, score, comparative_rank
                     FROM responses
                     WHERE query_id = ?
                     ORDER BY id ASC
@@ -775,15 +858,25 @@ class DatabaseManager:
             rows = cursor.fetchall()
             return [
                 {
-                    'api_name': row[0],
-                    'response': row[1],
-                    'timestamp': row[2],
-                    'score': row[3] if len(row) > 3 else None,
+                    'id': row[0],
+                    'api_name': row[1],
+                    'response': row[2],
+                    'timestamp': row[3],
+                    'score': row[4],
+                    'comparative_rank': row[5],
                 }
                 for row in rows
             ]
 
-    def insert_response(self, query_id, query, response, api_name, score=None):
+    def insert_response(
+        self,
+        query_id,
+        query,
+        response,
+        api_name,
+        score=None,
+        comparative_rank=None,
+    ):
         '''
         Insert a new response into the database
         '''
@@ -791,9 +884,44 @@ class DatabaseManager:
             timestamp = datetime.now().isoformat()
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO responses (query_id, query, response, api_name, score, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (query_id, query, response, api_name, score, timestamp))
+                INSERT INTO responses (
+                    query_id,
+                    query,
+                    response,
+                    api_name,
+                    score,
+                    comparative_rank,
+                    timestamp
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (query_id, query, response, api_name, score, comparative_rank, timestamp))
+            conn.commit()
+            return cursor.lastrowid
+
+    def update_comparative_rank(self, query_id, api_name, comparative_rank):
+        '''
+        Update comparative rank for a response row identified by query run and API
+        '''
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE responses
+                SET comparative_rank = ?
+                WHERE query_id = ? AND api_name = ?
+            ''', (comparative_rank, query_id, api_name))
+            conn.commit()
+
+    def update_comparative_rank_by_id(self, row_id, comparative_rank):
+        '''
+        Update comparative rank for a response row identified by its row id
+        '''
+        with sqlite3.connect(self.db_name) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE responses
+                SET comparative_rank = ?
+                WHERE id = ?
+            ''', (comparative_rank, row_id))
             conn.commit()
 
 
