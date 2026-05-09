@@ -9,6 +9,7 @@ class Ranker:
     def __init__(self):
         # SETUP AND AI INSTANCE
         # self._client = genai.Client(api_key=GEMINI_API_KEY)
+        pass
 
     def rank_response(self, query: str, response: str) -> int:
         '''
