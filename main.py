@@ -1,6 +1,5 @@
 
 
-from concurrent.futures import ThreadPoolExecutor
 import queue
 from typing import Union, Iterator
 
@@ -125,7 +124,7 @@ class App(customtkinter.CTk):
             return
         # Start the query worker in a separate thread
         apis = self._llm_handler._apis
-        self._create_empty_cards(len(apis))
+        self._create_empty_cards(apis)
 
         query_thread = threading.Thread(
             target=self.query_worker, args=(query,))
@@ -151,7 +150,7 @@ class App(customtkinter.CTk):
             # Check again in 50ms for a smoother streaming visual
             self.after(50, self.check_queue_for_updates)
 
-    def _create_empty_cards(self, num_cards):
+    def _create_empty_cards(self, apis):
         '''
         Create empty cards in the UI for the responses
         '''
@@ -160,7 +159,8 @@ class App(customtkinter.CTk):
             widget.destroy()
         self._textDisplays.clear()
 
-        for i in range(num_cards):
+        for i, api in enumerate(apis):
+            api_name = getattr(api, "_name", None) or f"Response {i + 1}"
             card = customtkinter.CTkFrame(
                 self.responses_frame,
                 corner_radius=18,
@@ -173,7 +173,7 @@ class App(customtkinter.CTk):
 
             title = customtkinter.CTkLabel(
                 card,
-                text=f"Response {i + 1}",
+                text=api_name,
                 font=("Segoe UI Semibold", 14),
                 anchor="w",
             )
@@ -194,23 +194,28 @@ class App(customtkinter.CTk):
             return
         apis = self._llm_handler._apis
 
-        with ThreadPoolExecutor() as executor:
-            for index, api in enumerate(apis):
-                executor.submit(self._read_stream_to_queue, api, query, index)
+        for index, api in enumerate(apis):
+            worker = threading.Thread(
+                target=self._api_worker,
+                args=(api, query, index),
+                daemon=True,
+            )
+            worker.start()
 
-    def _read_stream_to_queue(self, api, query, index):
+    def _api_worker(self, api, query, index):
         '''
-        Read the response stream from the API and add it to the queue
+        Read the response stream from one API and add it to the queue
         '''
         try:
-            if hasattr(api, 'query_stream'):
-                # Handle streaming APIs
-                for chunk in api.query_stream(query):
-                    self.response_queue.put({"index": index, "text": chunk})
-            else:
-                # Fallback for non-streaming APIs
-                full_text = api.query(query)
-                self.response_queue.put({"index": index, "text": full_text})
+            response = api.query_stream(query)
+
+            if isinstance(response, str) or response is None:
+                if response:
+                    self.response_queue.put({"index": index, "text": response})
+                return
+
+            for chunk in response:
+                self.response_queue.put({"index": index, "text": chunk})
 
         except Exception as e:
             self.response_queue.put(
@@ -222,9 +227,9 @@ class llmApi():
     Parent class for LLM APIs, with child classes for each specific API that implement the details of how to send queries and handle responses for that API
     '''
 
-    def __init__(self):
+    def __init__(self, name):
 
-        pass
+        self._name = name
 
     def query(self, query) -> str | None:
         '''
@@ -273,9 +278,9 @@ class geminiApi(llmApi):
     A class for handling communication with the Gemini API
     '''
 
-    def __init__(self, api_key, model="gemini-3.1-flash-lite"):
+    def __init__(self, api_key, model="gemini-3.1-flash-lite", name=None):
 
-        super().__init__()
+        super().__init__(name if name else model)
         self._api_key = api_key
         self._client = genai.Client(api_key=self._api_key)
         self._model = model
@@ -309,9 +314,9 @@ class openaiApi(llmApi):
     A class for handling communication with the OpenAI API
     '''
 
-    def __init__(self, api_key):
+    def __init__(self, api_key, name=None):
 
-        super().__init__()
+        super().__init__(name if name else "OpenAI API")
         self._api_key = api_key
         self._client = openai.OpenAI(api_key=self._api_key)
 
@@ -363,9 +368,9 @@ class openRouterApi(llmApi):
     A class for handling communication with the OpenRouter API
     '''
 
-    def __init__(self, api_key, model="inclusionai/ring-2.6-1t:free", url="https://openrouter.ai/api/v1"):
+    def __init__(self, api_key, name=None, model="inclusionai/ring-2.6-1t:free", url="https://openrouter.ai/api/v1"):
 
-        super().__init__()
+        super().__init__(name if name else model)
         self._api_key = api_key
         self._client = openai.OpenAI(
             base_url=url, api_key=self._api_key)
@@ -394,8 +399,9 @@ if not GEMINI_API_KEY:
     raise RuntimeError(
         "GEMINI_API_KEY not found. Add it to .env as GEMINI_API_KEY=... or export it in your shell."
     )
-main_llm_handler.add_api(geminiApi(GEMINI_API_KEY))
-main_llm_handler.add_api(openRouterApi(OPEN_ROUTER_API_KEY))
+main_llm_handler.add_api(geminiApi(GEMINI_API_KEY, name="Gemini API"))
+main_llm_handler.add_api(openRouterApi(
+    OPEN_ROUTER_API_KEY, name="OpenRouter API"))
 # if OPENAI_API_KEY:
 # main_llm_handler.add_api(openaiApi(OPENAI_API_KEY))
 app = App(llm_handler=main_llm_handler)
