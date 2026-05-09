@@ -168,7 +168,7 @@ class openRouterApi(llmApi):
         response = self._client.chat.completions.create(
             model=self._model,
             messages=[
-                {"role": "user", "content": "Hello! What can you do?"}
+                {"role": "user", "content": query}
             ],
             extra_headers=self._extra_headers
         )

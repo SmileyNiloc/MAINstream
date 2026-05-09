@@ -21,6 +21,8 @@ if not GEMINI_API_KEY:
 main_llm_handler.add_api(geminiApi(GEMINI_API_KEY, name="Gemini API"))
 main_llm_handler.add_api(openRouterApi(
     OPEN_ROUTER_API_KEY, name="OpenRouter API"))
+main_llm_handler.add_api(openRouterApi(
+    OPEN_ROUTER_API_KEY, name="NVIDIA nemotron", model="nvidia/nemotron-3-super-120b-a12b:free"))
 # if OPENAI_API_KEY:
 # main_llm_handler.add_api(openaiApi(OPENAI_API_KEY))
 app = App(llm_handler=main_llm_handler, database_manager=database_manager)

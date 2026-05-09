@@ -2,8 +2,6 @@ import customtkinter
 import threading
 import queue
 from uuid import uuid4
-from dotenv import load_dotenv
-import os
 from src.rank import Ranker
 from src.textdisplay import textDisplay
 
@@ -20,8 +18,7 @@ class App(customtkinter.CTk):
         self._results_lock = threading.Lock()
 
         self.title('MAINstream')
-        self.geometry('1180x960')
-        self.minsize(860, 620)
+        self._configure_responsive_window()
         self.grid_columnconfigure(0, weight=0)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -38,10 +35,10 @@ class App(customtkinter.CTk):
             border_width=1,
             border_color=('#D1D5DB', '#374151'),
             fg_color=('#F8FAFC', '#111827'),
-            width=290,
+            width=340,
         )
         self.sidebar_frame.grid(
-            row=0, column=0, padx=(24, 12), pady=24, sticky='nsew'
+            row=0, column=0, padx=(28, 14), pady=28, sticky='nsew'
         )
         self.sidebar_frame.grid_columnconfigure(0, weight=1)
         self.sidebar_frame.grid_rowconfigure(3, weight=1)
@@ -94,7 +91,7 @@ class App(customtkinter.CTk):
             fg_color=('#F8FAFC', '#111827'),
         )
         self.main_frame.grid(
-            row=0, column=1, padx=(12, 24), pady=24, sticky='nsew'
+            row=0, column=1, padx=(14, 28), pady=28, sticky='nsew'
         )
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(0, weight=1)
@@ -109,13 +106,13 @@ class App(customtkinter.CTk):
             orientation='horizontal',
         )
         self.responses_frame.grid(
-            row=0, column=0, padx=18, pady=(18, 12), sticky='nsew'
+            row=0, column=0, padx=22, pady=(22, 14), sticky='nsew'
         )
 
         self.queryInput = customtkinter.CTkEntry(
             self.main_frame,
             placeholder_text='Enter your query here...',
-            height=42,
+            height=48,
             corner_radius=14,
         )
         self.queryInput.grid(
@@ -125,7 +122,7 @@ class App(customtkinter.CTk):
             self.main_frame,
             text='Query LLMs',
             command=self.button_callback,
-            height=42,
+            height=48,
             corner_radius=14,
         )
         self.button.grid(row=2, column=0, padx=18, pady=(0, 18), sticky='ew')
@@ -143,6 +140,43 @@ class App(customtkinter.CTk):
 
         self.refresh_history_sidebar()
         self.check_queue_for_updates()
+
+    def _configure_responsive_window(self):
+        '''Set initial window size and scaling based on screen size.'''
+        self.update_idletasks()
+
+        screen_width = max(1, self.winfo_screenwidth())
+        screen_height = max(1, self.winfo_screenheight())
+
+        # Scale slightly down on smaller screens and up a bit on large ones.
+        # Keep the values conservative so the UI stays readable.
+        if screen_width <= 1366 or screen_height <= 768:
+            widget_scale = 0.92
+            window_scale = 0.92
+        elif screen_width >= 1920 or screen_height >= 1080:
+            widget_scale = 1.05
+            window_scale = 1.0
+        else:
+            widget_scale = 1.0
+            window_scale = 1.0
+
+        try:
+            customtkinter.set_widget_scaling(widget_scale)
+            customtkinter.set_window_scaling(window_scale)
+        except Exception:
+            pass
+
+        window_width = min(1680, max(1160, int(screen_width * 0.88)))
+        window_height = min(1080, max(780, int(screen_height * 0.88)))
+
+        min_width = min(1280, max(1024, int(screen_width * 0.78)))
+        min_height = min(860, max(720, int(screen_height * 0.78)))
+
+        x_pos = max(0, (screen_width - window_width) // 2)
+        y_pos = max(0, (screen_height - window_height) // 2)
+
+        self.geometry(f'{window_width}x{window_height}+{x_pos}+{y_pos}')
+        self.minsize(min_width, min_height)
 
     def button_callback(self):
         if self._loaded_history_query is not None:
@@ -231,7 +265,7 @@ class App(customtkinter.CTk):
                     qid, q),
                 anchor='w',
                 corner_radius=12,
-                height=72,
+                height=86,
             )
             button.pack(fill='x', padx=8, pady=6)
             self._history_buttons.append(button)
@@ -335,45 +369,45 @@ class App(customtkinter.CTk):
 
             card = customtkinter.CTkFrame(
                 self.responses_frame,
-                corner_radius=18,
+                corner_radius=22,
                 border_width=1,
                 border_color=(style['border'], style['border']),
                 fg_color=('#FFFFFF', '#111827'),
             )
-            card.grid(row=0, column=index, padx=8, pady=8, sticky='nsew')
+            card.grid(row=0, column=index, padx=12, pady=12, sticky='nsew')
             card.grid_columnconfigure(0, weight=1)
 
             title = customtkinter.CTkLabel(
                 card,
                 text=card_data['name'],
-                font=('Segoe UI Semibold', 14),
+                font=('Segoe UI Semibold', 16),
                 anchor='w',
             )
-            title.grid(row=0, column=0, padx=16, pady=(14, 8), sticky='ew')
+            title.grid(row=0, column=0, padx=20, pady=(18, 10), sticky='ew')
 
             rank_text = f"Ranked {self._ordinal(rank)}" if rank else 'Ranking pending'
             rank_label = customtkinter.CTkLabel(
                 card,
                 text=rank_text,
-                corner_radius=10,
+                corner_radius=12,
                 fg_color=style['rank_bg'],
                 text_color=style['rank_fg'],
-                font=('Segoe UI Semibold', 12),
-                padx=10,
-                pady=4,
+                font=('Segoe UI Semibold', 13),
+                padx=12,
+                pady=6,
             )
-            rank_label.grid(row=1, column=0, padx=16, pady=(0, 6), sticky='w')
+            rank_label.grid(row=1, column=0, padx=20, pady=(0, 8), sticky='w')
 
             score_text = f'Score: {score}' if score is not None else 'Score: ...'
             score_label = customtkinter.CTkLabel(
                 card,
                 text=score_text,
                 anchor='w',
-                font=('Segoe UI', 12),
+                font=('Segoe UI', 13),
                 text_color=('#1F2937', '#E5E7EB'),
             )
-            score_label.grid(row=2, column=0, padx=16,
-                             pady=(0, 8), sticky='ew')
+            score_label.grid(row=2, column=0, padx=20,
+                             pady=(0, 10), sticky='ew')
 
             comp_rank = card_data.get('comparative_rank')
             comp_text = f'Comparative Rank: {comp_rank}' if comp_rank is not None else 'Comparative Rank: ...'
@@ -381,15 +415,16 @@ class App(customtkinter.CTk):
                 card,
                 text=comp_text,
                 anchor='w',
-                font=('Segoe UI', 12),
+                font=('Segoe UI', 13),
                 text_color=('#1F2937', '#E5E7EB'),
             )
-            comp_label.grid(row=3, column=0, padx=16, pady=(0, 8), sticky='ew')
+            comp_label.grid(row=3, column=0, padx=20,
+                            pady=(0, 10), sticky='ew')
 
             self._textDisplays[index] = textDisplay(
-                card, width=340, height=540)
+                card, width=420, height=660)
             self._textDisplays[index].grid(
-                row=4, column=0, padx=16, pady=(0, 16), sticky='nsew'
+                row=4, column=0, padx=20, pady=(0, 20), sticky='nsew'
             )
 
             if card_data.get('text'):
