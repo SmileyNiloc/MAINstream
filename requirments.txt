@@ -1,0 +1,16 @@
+# mAInstream dependencies
+# Install with: pip install -r requirements.txt
+#
+# Note: also requires a local Ollama server running with the judge model
+# pulled (default: qwen2.5:7b). Install Ollama separately from ollama.com.
+
+# GUI
+customtkinter>=5.2.0
+ctk-markdown>=0.1.4
+
+# Config / environment
+python-dotenv>=1.0.0
+
+# LLM providers
+google-genai>=1.0.0
+openai>=1.0.0
