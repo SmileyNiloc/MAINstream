@@ -4,7 +4,7 @@ A desktop app that runs the same prompt against several LLMs in parallel, scores
 
 ## What it does
 
-You type a query once. mAInstream fires it at every configured model concurrently, streams each model's response into its own card, scores each completed response on a 1–10 scale using a local Ollama judge, and then asks the same judge to comparatively rank the responses against one another. The comparison runs again every time a new response finishes, so a late-arriving answer that's clearly better can leapfrog earlier ones without you having to re-run anything.
+You type a query once. MAINstream fires it at every configured model concurrently, streams each model's response into its own card, scores each completed response on a 1–10 scale using a local Ollama judge, and then asks the same judge to comparatively rank the responses against one another. The comparison runs again every time a new response finishes, so a late-arriving answer that's clearly better can leapfrog earlier ones without you having to re-run anything.
 
 Failed responses (rate limits, 4xx, network errors) are kept on screen for debugging but are excluded from the ranking, so two successful responses among five errors get ranked 1st and 2nd — not 5th and 7th.
 
