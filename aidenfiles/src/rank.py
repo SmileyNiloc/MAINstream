@@ -1,34 +1,154 @@
-import random
+import json
+import os
+import re
+import time
 from typing import List
+import openai
+
+
+_SCORE_PROMPT = """\
+You are an expert AI response evaluator. Score the following LLM response to the given query.
+IMPORTANT: ALWAYS RESPOND IN ENGLISH.
+
+Query:
+{query}
+
+Response:
+{response}
+
+Rate the response on a scale of 1 to 10 based on:
+- Accuracy and correctness
+- Clarity and readability
+- Completeness
+- Conciseness (penalise unnecessary padding)
+
+Reply with ONLY a JSON object in this exact format, no other text:
+{{"score": <integer 1-10>, "reason": "<one short sentence>"}}
+"""
+
+_COMPARE_PROMPT = """\
+You are an expert AI response evaluator. Rank the following responses to the query from best to worst.
+Each response includes a prior independent score (1-10) from an evaluator. Treat that score as a strong
+signal: your comparative rank should generally agree with the scores (a higher-scored response should
+rank above a lower-scored one) unless side-by-side comparison reveals a clear reason to deviate, in
+which case briefly justify the deviation to yourself before answering.
+If a response is an error, exclude it from the pool. So if there are 8 errors, the total possible ranks is first and second.
+Dont assign a rank until all prompts are evaluated. Rank 1 is best, rank {n} is worst, where n is the number of non-error responses.
+IMPORTANT: ALWAYS RESPOND IN ENGLISH.
+
+Query:
+{query}
+
+Responses:
+{responses}
+
+Assign each response a unique comparative rank (1 = best, {n} = worst).
+Consider accuracy, clarity, completeness, conciseness, AND the prior score shown for each response.
+
+Reply with ONLY a JSON array in this exact format, no other text:
+[{{"id": <response_id>, "rank": <integer>}}, ...]
+Include every response id exactly once.
+"""
 
 
 class Ranker:
-    '''
-    A class for ranking responses from an LLM
-    '''
+    """
+    Ranks LLM responses using OpenRouter's owl-alpha judge.
+    Falls back to a neutral score of 5 if the API call fails.
+    """
 
-    def __init__(self):
-        # SETUP AND AI INSTANCE
-        # self._client = genai.Client(api_key=GEMINI_API_KEY)
-        pass
+    def __init__(self, open_router_api_key: str = None, model: str = "openrouter/owl-alpha", url: str = "https://openrouter.ai/api/v1"):
+        self._model = model
+        key = open_router_api_key or os.getenv("OPEN_ROUTER_API_KEY")
+        if not key:
+            print("[Ranker] Warning: OPEN_ROUTER_API_KEY not found; ranking will fall back to neutral scores.")
+            self._client = None
+            return
+
+        self._client = openai.OpenAI(
+            base_url=url,
+            api_key=key,
+        )
+
+    def _call(self, prompt: str) -> str:
+        try:
+            response = self._client.chat.completions.create(
+                model=self._model,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"[Ranker] Local API call failed: {e}")
+            return ""
+
+    def _parse_json(self, text: str):
+        """Strip markdown fences and parse JSON."""
+        clean = re.sub(r"^```[a-z]*\n?|```$", "", text.strip(), flags=re.MULTILINE).strip()
+        return json.loads(clean)
 
     def rank_response(self, query: str, response: str) -> int:
-        '''
-        Rank a response from the LLM on a scale of 1 to 10
-        '''
-        # return a random integer between 1 and 10 for now
-        return random.randint(1, 10)
+        """
+        Score a single response on a scale of 1–10.
+        Returns 5 on any failure.
+        """
+        if not self._client:
+            return 5
+        try:
+            prompt = _SCORE_PROMPT.format(query=query, response=response)
+            raw = self._call(prompt)
+            data = self._parse_json(raw)
+            score = int(data["score"])
+            time.sleep(30)
+            return max(1, min(10, score))
+        except Exception as e:
+            print(f"[Ranker] rank_response failed: {e}")
+            return 5
 
     def compare_responses(self, query: str, responses: list[tuple]) -> List[tuple]:
-        '''
-        Compare responses and return comparative ranks aligned by index.
-        A lower rank value means a better relative result (1 = best).
-        '''
+        """
+        Compare responses and return a list of (rank, id) tuples.
+        `responses` is a list of (id, text, score) tuples. The per-response score
+        produced by rank_response is fed to the judge so the comparative rank
+        stays consistent with the individual scores. A lower rank value means a
+        better result (1 = best).
+        Falls back to a score-descending ranking if the judge call fails or
+        is unavailable.
+        """
         if not responses:
             return []
 
-        ids = [rid for rid, _ in responses]
-        possible_ranks = list(range(1, len(ids) + 1))
-        random.shuffle(possible_ranks)
-        # Assign ranks to ids in positional order (placeholder random ordering)
-        return [(possible_ranks[i], ids[i]) for i in range(len(ids))]
+        def _score_fallback():
+            """Rank by prior score, highest first; missing scores treated as 0.
+            Ties are broken by id so the output is deterministic."""
+            ordered = sorted(
+                responses,
+                key=lambda r: (
+                    -((r[2] if len(r) > 2 and r[2] is not None else 0)),
+                    r[0] if r[0] is not None else 0,
+                ),
+            )
+            return [(i + 1, item[0]) for i, item in enumerate(ordered)]
+
+        if not self._client:
+            return _score_fallback()
+
+        try:
+            # Only non-empty responses are shown to the judge, so `n` must match
+            # the number we actually format into the prompt.
+            shown = [
+                (rid, text, score) for rid, text, score in responses if text
+            ]
+            formatted = "\n\n".join(
+                f"[Response {rid}] (prior score: "
+                f"{score if score is not None else 'n/a'}/10)\n{text}"
+                for rid, text, score in shown
+            )
+            n = len(shown)
+            prompt = _COMPARE_PROMPT.format(query=query, responses=formatted, n=n)
+            raw = self._call(prompt)
+            data = self._parse_json(raw)
+            # data is a list of {"id": ..., "rank": ...}
+            return [(item["rank"], item["id"]) for item in data]
+        except Exception as e:
+            print(f"[Ranker] compare_responses failed: {e}")
+            return _score_fallback()

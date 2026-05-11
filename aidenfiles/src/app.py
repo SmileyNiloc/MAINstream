@@ -122,6 +122,7 @@ class App(customtkinter.CTk):
         self.queryInput.grid(
             row=1, column=0, padx=18, pady=(0, 12), sticky='ew'
         )
+        self.queryInput.bind('<Return>', lambda e: self.button_callback())
         self.button = customtkinter.CTkButton(
             self.main_frame,
             text='Query LLMs',
