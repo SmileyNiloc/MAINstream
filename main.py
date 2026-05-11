@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from src.app import App
 from src.dbmanager import DatabaseManager
 from src.llmapis import llmApiHandler, geminiApi, openRouterApi
+from src.rank import Ranker
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -35,7 +36,11 @@ for model_name, model_id in open_router_models.items():
     main_llm_handler.add_api(openRouterApi(
         OPEN_ROUTER_API_KEY, name=model_name, model=model_id))
 
+ranker = Ranker(llmapi=geminiApi(OPEN_ROUTER_API_KEY,
+                name="Owl Alpha", model="openrouter/owl-alpha"))
+
 # if OPENAI_API_KEY:
 # main_llm_handler.add_api(openaiApi(OPENAI_API_KEY))
-app = App(llm_handler=main_llm_handler, database_manager=database_manager)
+app = App(llm_handler=main_llm_handler,
+          database_manager=database_manager, ranker=ranker)
 app.mainloop()

@@ -6,13 +6,13 @@ from src.textdisplay import textDisplay
 
 
 class App(customtkinter.CTk):
-    def __init__(self, llm_handler=None, database_manager=None):
+    def __init__(self, llm_handler=None, database_manager=None, ranker=None):
         super().__init__()
 
         self._llm_handler = llm_handler
         self._database_manager = database_manager
         self._loaded_history_query = None
-        self._ranker = Ranker()
+        self._ranker = ranker
         self._latest_query_results = {}
         self._results_lock = threading.Lock()
         self._current_card_data = []

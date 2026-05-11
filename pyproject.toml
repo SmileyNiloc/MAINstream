@@ -6,5 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "customtkinter>=5.2.2",
+    "ctk-markdown>=0.1.4",
+    "pillow>=12.2.0",
     "python-dotenv>=1.0.1",
 ]
