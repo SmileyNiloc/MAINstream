@@ -41,14 +41,15 @@ if not GEMINI_API_KEY:
     )
 main_llm_handler.add_api(geminiApi(GEMINI_API_KEY, name="Gemini API"))
 
-main_llm_handler.add_api(ollamaLocalApi(
-    name="Ollama 3 Local", model="llama3", url="http://localhost:11434/v1"))
+# Uncomment to add a local Ollama instance
+# main_llm_handler.add_api(ollamaLocalApi(name="Ollama 3 Local", model="llama3", url="http://localhost:11434/v1"))
 
 open_router_models = {
     "Gemini Gemma 4 31B": ["google/gemma-4-31b-it:free", "google/gemma-4-26b-a4b-it:free"],
     # "NVIDIA nemotron": "nvidia/nemotron-3-super-120b-a12b:free",
     # "Poolside Laguna M.1": "poolside/laguna-m.1:free",
     "Owl Alpha": "openrouter/owl-alpha",
+    "Inclusion AI": "inclusionai/ring-2.6-1t:free",
     # "Baidu Qianfan: CoBuddy": "baidu/cobuddy:free",
     "OpenAI: gpt-oss-120b": "openai/gpt-oss-120b:free",
     #    "Anthropic: Claude Haiku 4.5": "anthropic/claude-haiku-4.5" # This one is not free
