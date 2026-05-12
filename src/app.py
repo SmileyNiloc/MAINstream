@@ -3,20 +3,23 @@ import threading
 from uuid import uuid4
 from src.rank import Ranker
 from src.textdisplay import textDisplay
+import src.search
 
 
 class App(customtkinter.CTk):
-    def __init__(self, llm_handler=None, database_manager=None, ranker=None):
+    def __init__(self, llm_handler=None, database_manager=None, ranker=None, local_api=None):
         super().__init__()
 
         self._llm_handler = llm_handler
         self._database_manager = database_manager
         self._loaded_history_query = None
         self._ranker = ranker
+        self.local_api = local_api
         self._latest_query_results = {}
         self._results_lock = threading.Lock()
         self._current_card_data = []
         self._query_in_progress = False
+        self._sort_by = 'score'
 
         self.title('MAINstream')
         self.geometry(f'{1520}x{1120}')
@@ -98,7 +101,23 @@ class App(customtkinter.CTk):
             row=0, column=1, padx=(14, 28), pady=28, sticky='nsew'
         )
         self.main_frame.grid_columnconfigure(0, weight=1)
-        self.main_frame.grid_rowconfigure(0, weight=1)
+        self.main_frame.grid_rowconfigure(1, weight=1)
+
+        self.search_context_textbox = customtkinter.CTkTextbox(
+            self.main_frame,
+            height=80,
+            corner_radius=14,
+            border_width=1,
+            border_color=('#D1D5DB', '#374151'),
+            fg_color=('#FFFFFF', '#1F2937'),
+        )
+        self.search_context_textbox.grid(
+            row=0, column=0, padx=22, pady=(22, 0), sticky='ew'
+        )
+        # We want it read-only mostly, but insert needs NORMAL state.
+        self.search_context_textbox.insert(
+            "0.0", "Search context will appear here...")
+        self.search_context_textbox.configure(state="disabled")
 
         self.responses_frame = customtkinter.CTkScrollableFrame(
             self.main_frame,
@@ -110,7 +129,7 @@ class App(customtkinter.CTk):
             orientation='horizontal',
         )
         self.responses_frame.grid(
-            row=0, column=0, padx=22, pady=(22, 14), sticky='nsew'
+            row=1, column=0, padx=22, pady=(22, 14), sticky='nsew'
         )
 
         self.queryInput = customtkinter.CTkEntry(
@@ -120,7 +139,7 @@ class App(customtkinter.CTk):
             corner_radius=14,
         )
         self.queryInput.grid(
-            row=1, column=0, padx=18, pady=(0, 12), sticky='ew'
+            row=2, column=0, padx=18, pady=(0, 12), sticky='ew'
         )
         self.button = customtkinter.CTkButton(
             self.main_frame,
@@ -129,17 +148,16 @@ class App(customtkinter.CTk):
             height=48,
             corner_radius=14,
         )
-        self.button.grid(row=2, column=0, padx=18, pady=(0, 18), sticky='ew')
+        self.button.grid(row=3, column=0, padx=18, pady=(0, 18), sticky='ew')
 
         # Sorting control: choose between Score and Comparative Rank
-        self._sort_by = 'score'
         self.sort_option = customtkinter.CTkOptionMenu(
             self.main_frame,
             values=['Score', 'Comparative Rank'],
             command=self._on_sort_option_change,
         )
         self.sort_option.set('Score')
-        self.sort_option.grid(row=3, column=0, padx=18,
+        self.sort_option.grid(row=4, column=0, padx=18,
                               pady=(0, 12), sticky='e')
 
         self.refresh_history_sidebar()
@@ -217,6 +235,7 @@ class App(customtkinter.CTk):
             }
 
         self._render_current_cards()
+        self._update_search_context_ui("Loading search context...")
 
         query_thread = threading.Thread(
             target=self.query_worker, args=(query, query_id), daemon=True
@@ -231,15 +250,13 @@ class App(customtkinter.CTk):
         self._set_query_button_enabled(True)
         self._clear_cards()
         self.queryInput.delete(0, 'end')
+        self._update_search_context_ui("Search context will appear here...")
         self.queryInput.focus_set()
 
     def _on_sort_option_change(self, value):
         '''Handle sort option changes from the UI.'''
         self._sort_by = 'comparative_rank' if value == 'Comparative Rank' else 'score'
-        with self._results_lock:
-            cards = [data for _, data in sorted(
-                self._latest_query_results.items())]
-        self._create_cards(cards)
+        self._create_cards(self._current_card_data)
 
     def refresh_history_sidebar(self):
         '''
@@ -479,7 +496,7 @@ class App(customtkinter.CTk):
             if self._llm_handler is None:
                 return
             apis = self._llm_handler._apis
-            workers = []
+            workers: list[threading.Thread] = []
 
             for index, api in enumerate(apis):
                 worker = threading.Thread(
@@ -490,6 +507,14 @@ class App(customtkinter.CTk):
                 worker.start()
                 workers.append(worker)
 
+            worker = threading.Thread(
+                target=self._search_worker,
+                args=(query,),
+                daemon=True
+            )
+            worker.start()
+            workers.append(worker)
+
             for worker in workers:
                 worker.join()
 
@@ -498,16 +523,19 @@ class App(customtkinter.CTk):
                     data for _, data in sorted(self._latest_query_results.items())
                 ]
 
-            # Build list of (row_id, text) for comparison so the comparator can
+            # Build list of (row_id, text, score) for comparison so the comparator can
             # return (rank, row_id) tuples which can be written back to exact DB rows.
             responses_for_comparison = [
-                (item.get('id'), item.get('text', '')) for item in completed_results
+                (item.get('id'), item.get('text', ''), item.get('score')) for item in completed_results
             ]
-
-            comparative_results = self._ranker.compare_responses(
-                query,
-                responses_for_comparison,
-            )
+            if self._ranker is not None:
+                comparative_results = self._ranker.compare_responses(
+                    query,
+                    responses_for_comparison,
+                )
+            else:
+                raise ValueError(
+                    "No ranker configured for comparative ranking")
 
             # comparative_results is expected as list of (rank, row_id)
             if comparative_results:
@@ -539,6 +567,21 @@ class App(customtkinter.CTk):
             ]
         self._create_cards(cards)
 
+    def _search_worker(self, query):
+        try:
+            context_result = src.search.get_synthesized_search_context(
+                query=query, fast_api=self.local_api)
+            self.after(0, self._update_search_context_ui, context_result)
+        except Exception as e:
+            self.after(0, self._update_search_context_ui,
+                       f"Search failed: {e}")
+
+    def _update_search_context_ui(self, text):
+        self.search_context_textbox.configure(state="normal")
+        self.search_context_textbox.delete("0.0", "end")
+        self.search_context_textbox.insert("0.0", text)
+        self.search_context_textbox.configure(state="disabled")
+
     def _api_worker(self, api, query_id, query, index):
         '''
         Query one API fully and add it to the results
@@ -558,7 +601,12 @@ class App(customtkinter.CTk):
 
             score = None
             if full_response:
-                score = self._ranker.rank_response(query, full_response)
+                if self._ranker and hasattr(self._ranker, 'rank_response'):
+                    score = self._ranker.rank_response(
+                        query, full_response)
+                else:
+                    # THIS MIGHT BREAK THINGS
+                    score = 5
 
             with self._results_lock:
                 self._latest_query_results[index] = {

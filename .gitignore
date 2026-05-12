@@ -9,3 +9,9 @@ wheels/
 # Virtual environments
 .venv
 .env
+settings*
+gemini_models.json
+mainstream.db
+openai_models.json
+.vscode/settings.json
+logs/

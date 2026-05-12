@@ -149,7 +149,7 @@ class openRouterApi(llmApi):
     A class for handling communication with the OpenRouter API
     '''
 
-    def __init__(self, api_key, name=None, model="inclusionai/ring-2.6-1t:free", url="https://openrouter.ai/api/v1"):
+    def __init__(self, api_key, name=None, model: str | list[str] = "inclusionai/ring-2.6-1t:free", url="https://openrouter.ai/api/v1"):
 
         super().__init__(name if name else model)
         self._api_key = api_key
@@ -165,11 +165,54 @@ class openRouterApi(llmApi):
         Send a query to the OpenRouter API and return the response
         '''
 
+        try:
+            response = self._client.chat.completions.create(
+                model=self._model if isinstance(
+                    self._model, str) else self._model[0],
+                extra_body={
+                    "models": self._model if isinstance(self._model, list) else [self._model]
+                },
+                messages=[
+                    {"role": "user", "content": query}
+                ],
+                extra_headers=self._extra_headers
+            )
+            return response.choices[0].message.content
+        except openai.RateLimitError:
+            return "\n[Error: API rate-limited. Too many requests. This response is unhelpful/unavailable.]"
+        except openai.APIError as e:
+            if hasattr(e, 'status_code') and e.code == 429:
+                return "\n[Error: API rate-limited. Too many requests. This response is unhelpful/useless.]"
+            raise
+
+
+class ollamaLocalApi(llmApi):
+    '''
+    A class for handling communication with a local Ollama instance
+    '''
+
+    def __init__(self, name="Ollama Local", model="llama3", url="http://localhost:11434/v1"):
+        super().__init__(name)
+        # Ollama doesn't check keys, but the OpenAI client needs a non-empty string
+        self._client = openai.OpenAI(base_url=url, api_key="ollama")
+        self._model = model
+
+    def query(self, query):
         response = self._client.chat.completions.create(
             model=self._model,
-            messages=[
-                {"role": "user", "content": query}
-            ],
-            extra_headers=self._extra_headers
+            messages=[{"role": "user", "content": query}]
         )
         return response.choices[0].message.content
+
+    def query_stream(self, query):
+        '''
+        Streaming version for the MAINstream dashboard
+        '''
+        stream = self._client.chat.completions.create(
+            model=self._model,
+            messages=[{"role": "user", "content": query}],
+            stream=True
+        )
+        for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
