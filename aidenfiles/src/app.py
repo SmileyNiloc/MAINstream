@@ -2,6 +2,7 @@ import customtkinter
 import threading
 from uuid import uuid4
 from src.rank import Ranker
+from src.synthesize import Synthesizer
 from src.textdisplay import textDisplay
 
 
@@ -13,6 +14,7 @@ class App(customtkinter.CTk):
         self._database_manager = database_manager
         self._loaded_history_query = None
         self._ranker = Ranker()
+        self._synthesizer = Synthesizer()
         self._latest_query_results = {}
         self._results_lock = threading.Lock()
         self._current_card_data = []
@@ -524,6 +526,28 @@ class App(customtkinter.CTk):
                         self._database_manager.update_comparative_rank_by_id(
                             row_id, rank_val
                         )
+
+            # Synthesize top 3 ranked responses
+            if completed_results:
+                # Sort by comparative_rank if available, otherwise by score
+                sorted_results = sorted(
+                    completed_results,
+                    key=lambda x: (
+                        x.get('comparative_rank', 9999),
+                        -x.get('score', 0) if x.get('score') is not None else 0
+                    )
+                )
+                
+                # Get top 3 responses (filter out empty/error responses)
+                top_responses = [
+                    result for result in sorted_results 
+                    if result.get('text') and not result.get('text', '').startswith('\n[Error:')
+                ][:3]
+                
+                if top_responses:
+                    top_texts = [resp['text'] for resp in top_responses]
+                    # Synthesize and print to terminal
+                    self._synthesizer.synthesize_responses(query, top_texts)
 
             if self._latest_query_results:
                 self.after(0, self._render_current_cards)

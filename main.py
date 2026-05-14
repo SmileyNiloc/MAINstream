@@ -42,7 +42,7 @@ if not GEMINI_API_KEY:
 main_llm_handler.add_api(geminiApi(GEMINI_API_KEY, name="Gemini API"))
 
 # Uncomment to add a local Ollama instance
-# main_llm_handler.add_api(ollamaLocalApi(name="Ollama 3 Local", model="llama3", url="http://localhost:11434/v1"))
+main_llm_handler.add_api(ollamaLocalApi(name="Ollama 3 Local", model="llama3", url="http://localhost:11434/v1"))
 
 open_router_models = {
     "Gemini Gemma 4 31B": ["google/gemma-4-31b-it:free", "google/gemma-4-26b-a4b-it:free"],
