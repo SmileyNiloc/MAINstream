@@ -6,5 +6,9 @@
             "packageManager": "ms-python.python:pip"
         }
     ],
-    "python.defaultInterpreterPath": "./.venv/bin/python"
+    "python.defaultInterpreterPath": "./.venv/bin/python",
+    "chat.tools.terminal.autoApprove": {
+        "/workspaces/MAINstream/.venv/bin/python": true,
+        "./.venv/bin/python": true
+    }
 }
