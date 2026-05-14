@@ -53,11 +53,11 @@ class Synthesizer:
     def synthesize_responses(self, query: str, responses: List[str]) -> str:
         """
         Synthesize multiple responses into a single coherent response.
-        
+
         Args:
             query (str): The original query for context
             responses (List[str]): List of responses to synthesize
-            
+
         Returns:
             str: The synthesized response. Returns fallback summary on failure.
         """
@@ -83,22 +83,23 @@ class Synthesizer:
                 f"[Response {i}]\n{response}"
                 for i, response in enumerate(responses, 1)
             )
-            
+
             prompt = _SYNTHESIZE_PROMPT.format(
                 query=query,
                 responses=formatted_responses
             )
-            
+
             raw = self._llmapi.query(prompt)
             if not raw:
                 raise ValueError("Empty response from synthesizer API")
-            
+
             logger.debug("Received synthesizer API response")
             synthesized = raw.strip()
-            
+
             # Print to terminal for testing
-            print(f"[Synthesizer Output]\nQuery: {query}\n\nSynthesized Response:\n{synthesized}\n")
-            
+            print(
+                f"[Synthesizer Output]\nQuery: {query}\n\nSynthesized Response:\n{synthesized}\n")
+
             return synthesized
 
         except Exception as e:

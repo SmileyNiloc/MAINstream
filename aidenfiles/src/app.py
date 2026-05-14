@@ -537,13 +537,13 @@ class App(customtkinter.CTk):
                         -x.get('score', 0) if x.get('score') is not None else 0
                     )
                 )
-                
+
                 # Get top 3 responses (filter out empty/error responses)
                 top_responses = [
-                    result for result in sorted_results 
+                    result for result in sorted_results
                     if result.get('text') and not result.get('text', '').startswith('\n[Error:')
                 ][:3]
-                
+
                 if top_responses:
                     top_texts = [resp['text'] for resp in top_responses]
                     # Synthesize and print to terminal

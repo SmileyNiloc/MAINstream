@@ -8,14 +8,14 @@ import src.search
 
 
 class App(customtkinter.CTk):
-    def __init__(self, llm_handler=None, database_manager=None, ranker=None, local_api=None):
+    def __init__(self, llm_handler=None, database_manager=None, ranker=None, local_api=None, synthesizer=None):
         super().__init__()
 
         self._llm_handler = llm_handler
         self._database_manager = database_manager
         self._loaded_history_query = None
         self._ranker = ranker
-        self._synthesizer = Synthesizer()
+        self._synthesizer = synthesizer
         self.local_api = local_api
         self._latest_query_results = {}
         self._results_lock = threading.Lock()
@@ -105,21 +105,48 @@ class App(customtkinter.CTk):
         self.main_frame.grid_columnconfigure(0, weight=1)
         self.main_frame.grid_rowconfigure(1, weight=1)
 
-        self.search_context_textbox = customtkinter.CTkTextbox(
+        self.top_info_frame = customtkinter.CTkFrame(
             self.main_frame,
-            height=80,
+            fg_color="transparent"
+        )
+        self.top_info_frame.grid(
+            row=0, column=0, padx=22, pady=(22, 0), sticky='ew'
+        )
+        self.top_info_frame.grid_columnconfigure(
+            0, weight=1, uniform="top_boxes")
+        self.top_info_frame.grid_columnconfigure(
+            1, weight=1, uniform="top_boxes")
+
+        self.search_context_textbox = customtkinter.CTkTextbox(
+            self.top_info_frame,
+            height=200,
             corner_radius=14,
             border_width=1,
             border_color=('#D1D5DB', '#374151'),
             fg_color=('#FFFFFF', '#1F2937'),
         )
         self.search_context_textbox.grid(
-            row=0, column=0, padx=22, pady=(22, 0), sticky='ew'
+            row=0, column=0, padx=(0, 11), sticky='ew'
         )
         # We want it read-only mostly, but insert needs NORMAL state.
         self.search_context_textbox.insert(
             "0.0", "Search context will appear here...")
         self.search_context_textbox.configure(state="disabled")
+
+        self.synthesis_textbox = customtkinter.CTkTextbox(
+            self.top_info_frame,
+            height=200,
+            corner_radius=14,
+            border_width=1,
+            border_color=('#D1D5DB', '#374151'),
+            fg_color=('#FFFFFF', '#1F2937'),
+        )
+        self.synthesis_textbox.grid(
+            row=0, column=1, padx=(11, 0), sticky='ew'
+        )
+        self.synthesis_textbox.insert(
+            "0.0", "Synthesized response will appear here...")
+        self.synthesis_textbox.configure(state="disabled")
 
         self.responses_frame = customtkinter.CTkScrollableFrame(
             self.main_frame,
@@ -238,6 +265,7 @@ class App(customtkinter.CTk):
 
         self._render_current_cards()
         self._update_search_context_ui("Loading search context...")
+        self._update_synthesis_ui("Synthesizing response...")
 
         query_thread = threading.Thread(
             target=self.query_worker, args=(query, query_id), daemon=True
@@ -253,6 +281,7 @@ class App(customtkinter.CTk):
         self._clear_cards()
         self.queryInput.delete(0, 'end')
         self._update_search_context_ui("Search context will appear here...")
+        self._update_synthesis_ui("Synthesized response will appear here...")
         self.queryInput.focus_set()
 
     def _on_sort_option_change(self, value):
@@ -319,6 +348,9 @@ class App(customtkinter.CTk):
         self._set_query_button_enabled(False)
         self.queryInput.delete(0, 'end')
         self.queryInput.insert(0, query)
+        self._update_search_context_ui("Search context not stored in history.")
+        self._update_synthesis_ui(
+            "Synthesized response not stored in history.")
         self._current_card_data = [
             {
                 'name': response['api_name'],
@@ -568,8 +600,13 @@ class App(customtkinter.CTk):
                     if item.get('text') and not item.get('text', '').startswith('\n[Error:')
                 ][:3]
 
-                if top_texts:
-                    self._synthesizer.synthesize_responses(query, top_texts)
+                if top_texts and self._synthesizer is not None:
+                    synthesized = self._synthesizer.synthesize_responses(
+                        query, top_texts)
+                    self.after(0, self._update_synthesis_ui, synthesized)
+                else:
+                    self.after(0, self._update_synthesis_ui,
+                               "No responses available to synthesize or synthesizer missing.")
 
                 self.after(0, self._render_current_cards)
 
@@ -587,6 +624,8 @@ class App(customtkinter.CTk):
 
     def _search_worker(self, query):
         try:
+            if self.local_api is None:
+                raise ValueError("Local API is not configured")
             context_result = src.search.get_synthesized_search_context(
                 query=query, fast_api=self.local_api)
             self.after(0, self._update_search_context_ui, context_result)
@@ -599,6 +638,12 @@ class App(customtkinter.CTk):
         self.search_context_textbox.delete("0.0", "end")
         self.search_context_textbox.insert("0.0", text)
         self.search_context_textbox.configure(state="disabled")
+
+    def _update_synthesis_ui(self, text):
+        self.synthesis_textbox.configure(state="normal")
+        self.synthesis_textbox.delete("0.0", "end")
+        self.synthesis_textbox.insert("0.0", text)
+        self.synthesis_textbox.configure(state="disabled")
 
     def _api_worker(self, api, query_id, query, index):
         '''

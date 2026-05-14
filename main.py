@@ -6,6 +6,7 @@ from src.app import App
 from src.dbmanager import DatabaseManager
 from src.llmapis import llmApiHandler, geminiApi, openRouterApi, ollamaLocalApi
 from src.rank import Ranker
+from src.synthesize import Synthesizer
 load_dotenv()
 
 logs_dir = "logs"
@@ -42,7 +43,8 @@ if not GEMINI_API_KEY:
 main_llm_handler.add_api(geminiApi(GEMINI_API_KEY, name="Gemini API"))
 
 # Uncomment to add a local Ollama instance
-main_llm_handler.add_api(ollamaLocalApi(name="Ollama 3 Local", model="llama3", url="http://localhost:11434/v1"))
+main_llm_handler.add_api(ollamaLocalApi(
+    name="Ollama 3 Local", model="llama3", url="http://localhost:11434/v1"))
 
 open_router_models = {
     "Gemini Gemma 4 31B": ["google/gemma-4-31b-it:free", "google/gemma-4-26b-a4b-it:free"],
@@ -65,8 +67,10 @@ local_api = ollamaLocalApi(
 
 ranker = Ranker(llmapi=local_api)
 
+systhesizer = Synthesizer(llmapi=local_api)
+
 # if OPENAI_API_KEY:
 # main_llm_handler.add_api(openaiApi(OPENAI_API_KEY))
 app = App(llm_handler=main_llm_handler,
-          database_manager=database_manager, ranker=ranker, local_api=local_api)
+          database_manager=database_manager, ranker=ranker, local_api=local_api, synthesizer=systhesizer)
 app.mainloop()
